@@ -9,8 +9,10 @@
 /[Mm]emoryCaptures/
 /[Rr]ecordings/
 
-# Asset Store 工具（如有）
+# Asset Store 工具与不需要的模板教程资源
 /[Aa]ssets/AssetStoreTools*
+/[Aa]ssets/Tutorials/
+/[Aa]ssets/Tutorials.meta
 
 # IDE 与编辑器生成文件
 /.vs/
