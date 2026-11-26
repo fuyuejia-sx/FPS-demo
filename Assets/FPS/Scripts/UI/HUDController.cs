@@ -1,5 +1,8 @@
 using TMPro;
 using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.InputSystem.UI;
+using UnityEngine.UI;
 
 namespace FPS
 {
@@ -82,6 +85,7 @@ namespace FPS
         private Color _coinGainBaseColor = new Color(1f, 0.88f, 0.25f);
         private float _ammoPickupTimer;
         private Color _ammoPickupColor = new Color(0.35f, 0.95f, 0.55f);
+        private GameObject _pausePanel;
 
         private void Start()
         {
@@ -130,9 +134,19 @@ namespace FPS
             AmmoPickup.AmmoPickedUp += OnAmmoPickedUp;
             AmmoPickup.AmmoAlreadyFull += OnAmmoAlreadyFull;
 
+            if (gameManager == null)
+            {
+                gameManager = FindFirstObjectByType<GameManager>();
+            }
+
+            EnsureUiInputSupport();
+            BuildPauseMenuAndHint();
+            EnsureSettlementButtons();
+
             if (gameManager != null)
             {
                 gameManager.StateChanged += OnGameStateChanged;
+                gameManager.PauseChanged += OnPauseChanged;
             }
 
             if (messagePanel != null)
@@ -210,6 +224,7 @@ namespace FPS
             if (gameManager != null)
             {
                 gameManager.StateChanged -= OnGameStateChanged;
+                gameManager.PauseChanged -= OnPauseChanged;
             }
         }
 
@@ -469,11 +484,194 @@ namespace FPS
             return label;
         }
 
+        private void OnPauseChanged(bool paused)
+        {
+            if (_pausePanel != null)
+            {
+                _pausePanel.SetActive(paused);
+                if (paused)
+                {
+                    _pausePanel.transform.SetAsLastSibling();
+                }
+            }
+
+            if (crosshair != null && (gameManager == null || gameManager.State == GameState.Playing))
+            {
+                crosshair.SetActive(!paused);
+            }
+        }
+
+        private void EnsureUiInputSupport()
+        {
+            if (GetComponent<GraphicRaycaster>() == null)
+            {
+                gameObject.AddComponent<GraphicRaycaster>();
+            }
+
+            if (FindFirstObjectByType<EventSystem>() == null)
+            {
+                var es = new GameObject("EventSystem", typeof(EventSystem), typeof(InputSystemUIInputModule));
+                es.transform.SetParent(null);
+            }
+        }
+
+        /// <summary>构建 ESC 暂停菜单（继续、重新开始、退出游戏）及右上角快捷键提示。</summary>
+        private void BuildPauseMenuAndHint()
+        {
+            // 右上角快捷键提示（排在 [B] SHOP 和 [I] BACKPACK 下方）
+            TMP_Text pauseHint = CreateRuntimeText(
+                "PauseHintText",
+                Vector2.one, Vector2.one, Vector2.one,
+                new Vector2(-40f, -200f), new Vector2(300f, 34f),
+                20f, TextAlignmentOptions.TopRight, new Color(0.75f, 0.86f, 0.96f, 0.9f));
+            pauseHint.text = "[ESC] PAUSE";
+
+            // 全屏暗色遮罩
+            var backdropObj = new GameObject("PausePanel", typeof(RectTransform), typeof(Image));
+            backdropObj.layer = gameObject.layer;
+            backdropObj.transform.SetParent(transform, false);
+            var backdropRect = (RectTransform)backdropObj.transform;
+            backdropRect.anchorMin = Vector2.zero;
+            backdropRect.anchorMax = Vector2.one;
+            backdropRect.offsetMin = Vector2.zero;
+            backdropRect.offsetMax = Vector2.zero;
+            Image backdrop = backdropObj.GetComponent<Image>();
+            backdrop.color = new Color(0.02f, 0.04f, 0.08f, 0.78f);
+            backdrop.raycastTarget = true;
+
+            // 居中暂停窗口
+            var cardObj = new GameObject("PauseWindow", typeof(RectTransform), typeof(Image), typeof(Outline));
+            cardObj.layer = gameObject.layer;
+            cardObj.transform.SetParent(backdropObj.transform, false);
+            var cardRect = (RectTransform)cardObj.transform;
+            cardRect.anchorMin = new Vector2(0.5f, 0.5f);
+            cardRect.anchorMax = new Vector2(0.5f, 0.5f);
+            cardRect.pivot = new Vector2(0.5f, 0.5f);
+            cardRect.anchoredPosition = Vector2.zero;
+            cardRect.sizeDelta = new Vector2(460f, 390f);
+            cardObj.GetComponent<Image>().color = new Color(0.07f, 0.10f, 0.16f, 0.97f);
+            Outline border = cardObj.GetComponent<Outline>();
+            border.effectColor = new Color(0.25f, 0.80f, 1f, 0.65f);
+            border.effectDistance = new Vector2(2f, -2f);
+
+            TMP_Text title = CreatePanelText(cardObj.transform, "PauseTitle", "PAUSED", 44f, Color.white);
+            RectTransform titleRect = title.rectTransform;
+            titleRect.anchorMin = new Vector2(0f, 1f);
+            titleRect.anchorMax = new Vector2(1f, 1f);
+            titleRect.pivot = new Vector2(0.5f, 1f);
+            titleRect.anchoredPosition = new Vector2(0f, -28f);
+            titleRect.sizeDelta = new Vector2(-40f, 56f);
+
+            CreatePanelButton(cardObj.transform, "ResumeButton", "RESUME [ESC]",
+                new Vector2(0f, 34f), new Vector2(320f, 58f), new Color(0.16f, 0.62f, 0.36f),
+                () => gameManager?.Resume());
+
+            CreatePanelButton(cardObj.transform, "RestartButton", "RESTART",
+                new Vector2(0f, -42f), new Vector2(320f, 58f), new Color(0.20f, 0.45f, 0.68f),
+                () => gameManager?.Restart());
+
+            CreatePanelButton(cardObj.transform, "QuitButton", "QUIT GAME",
+                new Vector2(0f, -118f), new Vector2(320f, 58f), new Color(0.62f, 0.22f, 0.22f),
+                () => gameManager?.QuitGame());
+
+            backdropObj.SetActive(false);
+            _pausePanel = backdropObj;
+        }
+
+        /// <summary>在胜利/失败结算界面添加可点击的重新开始与退出游戏按钮。</summary>
+        private void EnsureSettlementButtons()
+        {
+            if (messagePanel == null || messagePanel.transform.Find("SettlementButtons") != null)
+            {
+                return;
+            }
+
+            Image panelImage = messagePanel.GetComponent<Image>();
+            if (panelImage != null)
+            {
+                panelImage.raycastTarget = true;
+            }
+
+            var container = new GameObject("SettlementButtons", typeof(RectTransform));
+            container.layer = gameObject.layer;
+            container.transform.SetParent(messagePanel.transform, false);
+            var rect = (RectTransform)container.transform;
+            rect.anchorMin = new Vector2(0.5f, 0.5f);
+            rect.anchorMax = new Vector2(0.5f, 0.5f);
+            rect.pivot = new Vector2(0.5f, 0.5f);
+            rect.anchoredPosition = new Vector2(0f, -170f);
+            rect.sizeDelta = new Vector2(560f, 68f);
+
+            CreatePanelButton(container.transform, "SettlementRestartButton", "RESTART [R]",
+                new Vector2(-140f, 0f), new Vector2(240f, 60f), new Color(0.18f, 0.55f, 0.78f),
+                () => gameManager?.Restart());
+
+            CreatePanelButton(container.transform, "SettlementQuitButton", "QUIT GAME",
+                new Vector2(140f, 0f), new Vector2(240f, 60f), new Color(0.62f, 0.22f, 0.22f),
+                () => gameManager?.QuitGame());
+        }
+
+        private TMP_Text CreatePanelText(Transform parent, string objectName, string content, float fontSize, Color color)
+        {
+            var go = new GameObject(objectName, typeof(RectTransform));
+            go.layer = gameObject.layer;
+            go.transform.SetParent(parent, false);
+            TextMeshProUGUI label = go.AddComponent<TextMeshProUGUI>();
+            if (enemyCountText != null && enemyCountText.font != null)
+            {
+                label.font = enemyCountText.font;
+            }
+
+            label.text = content;
+            label.fontSize = fontSize;
+            label.alignment = TextAlignmentOptions.Center;
+            label.color = color;
+            label.raycastTarget = false;
+            return label;
+        }
+
+        private void CreatePanelButton(
+            Transform parent, string objectName, string labelText,
+            Vector2 anchoredPosition, Vector2 size, Color bgColor,
+            UnityEngine.Events.UnityAction onClick)
+        {
+            var go = new GameObject(objectName, typeof(RectTransform), typeof(Image), typeof(Button));
+            go.layer = gameObject.layer;
+            go.transform.SetParent(parent, false);
+
+            var rect = (RectTransform)go.transform;
+            rect.anchorMin = new Vector2(0.5f, 0.5f);
+            rect.anchorMax = new Vector2(0.5f, 0.5f);
+            rect.pivot = new Vector2(0.5f, 0.5f);
+            rect.anchoredPosition = anchoredPosition;
+            rect.sizeDelta = size;
+
+            Image bg = go.GetComponent<Image>();
+            bg.color = bgColor;
+            bg.raycastTarget = true;
+
+            Button button = go.GetComponent<Button>();
+            button.targetGraphic = bg;
+            button.onClick.AddListener(onClick);
+
+            TMP_Text label = CreatePanelText(go.transform, "Label", labelText, 24f, Color.white);
+            RectTransform labelRect = label.rectTransform;
+            labelRect.anchorMin = Vector2.zero;
+            labelRect.anchorMax = Vector2.one;
+            labelRect.offsetMin = Vector2.zero;
+            labelRect.offsetMax = Vector2.zero;
+        }
+
         private void OnGameStateChanged(GameState state)
         {
             if (state == GameState.Playing)
             {
                 return;
+            }
+
+            if (_pausePanel != null)
+            {
+                _pausePanel.SetActive(false);
             }
 
             if (crosshair != null)
@@ -484,12 +682,13 @@ namespace FPS
             if (messageText != null)
             {
                 string title = state == GameState.Victory ? "VICTORY" : "GAME OVER";
-                messageText.text = $"{title}\n<size=50%>Press R to restart</size>";
+                messageText.text = $"{title}\n<size=45%>Press R to restart</size>";
             }
 
             if (messagePanel != null)
             {
                 messagePanel.SetActive(true);
+                messagePanel.transform.SetAsLastSibling();
             }
         }
     }

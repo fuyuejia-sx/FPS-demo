@@ -112,6 +112,11 @@ namespace FPS
                 return;
             }
 
+            if (gameManager != null && gameManager.IsPaused)
+            {
+                return;
+            }
+
             if (keyboard[toggleKey].wasPressedThisFrame)
             {
                 ToggleShop();
@@ -119,6 +124,7 @@ namespace FPS
             else if (IsOpen && keyboard.escapeKey.wasPressedThisFrame)
             {
                 CloseShop();
+                GameManager.ConsumeEscapeThisFrame();
             }
         }
 

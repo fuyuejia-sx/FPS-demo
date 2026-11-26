@@ -141,6 +141,11 @@ namespace FPS
                 return;
             }
 
+            if (gameManager != null && gameManager.IsPaused)
+            {
+                return;
+            }
+
             if (keyboard[toggleKey].wasPressedThisFrame)
             {
                 ToggleBackpack();
@@ -148,6 +153,7 @@ namespace FPS
             else if (IsBackpackOpen && keyboard.escapeKey.wasPressedThisFrame)
             {
                 CloseBackpack();
+                GameManager.ConsumeEscapeThisFrame();
             }
         }
 
