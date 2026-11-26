@@ -24,17 +24,44 @@ namespace FPS.EditorTools
     {
         private const string MenuPath = "FPS/一键配置场景";
         private const string ShopMenuPath = "FPS/配置商城与陈列柜";
+        private const string AmmoMenuPath = "FPS/放置弹药补给箱";
         private const string EnemyMaterialPath = "Assets/FPS/Materials/Enemy.mat";
         private const string ShieldMaterialPath = "Assets/FPS/Materials/Shield.mat";
+        private const string AmmoCrateMaterialPath = "Assets/FPS/Materials/AmmoCrate.mat";
+        private const string AmmoAccentMaterialPath = "Assets/FPS/Materials/AmmoCrateAccent.mat";
         private const string BlasterModelPath = "Assets/FPS/Models/BlasterKit/blaster-d.fbx";
         private const string BlasterMaterialPath = "Assets/FPS/Materials/Blaster.mat";
         private const int UILayer = 5;
 
         [MenuItem(MenuPath, true)]
         [MenuItem(ShopMenuPath, true)]
+        [MenuItem(AmmoMenuPath, true)]
         private static bool CanSetupScene()
         {
             return !EditorApplication.isPlayingOrWillChangePlaymode;
+        }
+
+        [MenuItem(AmmoMenuPath)]
+        private static void PlaceAmmoPickupsFromMenu()
+        {
+            PlayerMovement movement = FindInScene<PlayerMovement>();
+            if (movement == null)
+            {
+                EditorUtility.DisplayDialog("FPS 弹药补给",
+                    "场景中没有找到玩家物体，请先执行 FPS > 一键配置场景。", "确定");
+                return;
+            }
+
+            Undo.SetCurrentGroupName("FPS 放置弹药补给箱");
+            var log = new List<string>();
+            int created = PlaceAmmoPickups(movement.transform, 3, log);
+
+            EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+            string summary = created > 0
+                ? "已放置弹药补给箱：\n\n- " + string.Join("\n- ", log) + "\n\n走近弹药箱即可拾取补给（不超过最大备弹上限），请按 Ctrl+S 保存场景。"
+                : "没有成功放置弹药补给箱，请检查场景地面碰撞体。";
+            Debug.Log("[FPS 弹药补给] " + summary);
+            EditorUtility.DisplayDialog("FPS 弹药补给", summary, "确定");
         }
 
         [MenuItem(ShopMenuPath)]
@@ -266,6 +293,12 @@ namespace FPS.EditorTools
             // ---------- 带骨骼的敌人 ----------
             // Assets/FPS/Animations 下有带骨骼的模型、且场景里还没有带骨骼的敌人时，添加一个
             FPSRiggedEnemy.EnsureRiggedEnemy(log);
+
+            // ---------- 弹药补给箱 ----------
+            if (FindInScene<AmmoPickup>() == null)
+            {
+                PlaceAmmoPickups(player.transform, 3, log);
+            }
 
             // ---------- 收尾 ----------
             Scene scene = SceneManager.GetActiveScene();
@@ -577,6 +610,7 @@ namespace FPS.EditorTools
             WeaponAmmo ammo = blasterObject.AddComponent<WeaponAmmo>();
             SetInt(ammo, "magazineSize", 20);
             SetInt(ammo, "startingReserve", 100);
+            SetInt(ammo, "maxReserve", 100);
             SetFloat(ammo, "reloadTime", 1.2f);
 
             Light muzzle = CreateMuzzleLight(blasterObject.transform);
@@ -635,6 +669,280 @@ namespace FPS.EditorTools
 
             serialized.ApplyModifiedProperties();
             log.Add("商城商品列表：上架 PULSE BLASTER（80 金币，使用 blaster-d.fbx 3D 陈列）");
+        }
+
+        // =====================================================================
+        // 弹药补给箱
+        // =====================================================================
+
+        private static int PlaceAmmoPickups(Transform player, int count, List<string> log)
+        {
+            GameObject group = GameObject.Find("AmmoPickups");
+            if (group == null)
+            {
+                group = new GameObject("AmmoPickups");
+                Undo.RegisterCreatedObjectUndo(group, "Create AmmoPickups");
+            }
+
+            Material bodyMat = GetOrCreateAmmoCrateMaterial();
+            Material accentMat = GetOrCreateAmmoAccentMaterial();
+
+            Physics.SyncTransforms();
+
+            Vector3 forward = player.forward;
+            forward.y = 0f;
+            if (forward.sqrMagnitude < 0.001f)
+            {
+                forward = Vector3.forward;
+            }
+            forward.Normalize();
+            Vector3 right = Vector3.Cross(Vector3.up, forward).normalized;
+
+            // 在玩家前方及站台沿线找空地放置弹药补给箱（优先避开墙体和障碍）
+            var candidateOffsets = new[]
+            {
+                new Vector2(2.4f, 4.5f),
+                new Vector2(-2.4f, 9.5f),
+                new Vector2(2.2f, 15.5f),
+                new Vector2(-2.2f, 4.5f),
+                new Vector2(0f, 7.0f),
+                new Vector2(0f, 13.0f),
+                new Vector2(2.8f, 2.5f),
+                new Vector2(-2.8f, 2.5f),
+            };
+
+            var placed = new List<Vector3>();
+            foreach (AmmoPickup existing in FindAllInScene<AmmoPickup>())
+            {
+                placed.Add(existing.transform.position);
+            }
+
+            int created = 0;
+            foreach (Vector2 offset in candidateOffsets)
+            {
+                if (created >= count)
+                {
+                    break;
+                }
+
+                Vector3 probe = player.position + right * offset.x + forward * offset.y;
+                if (!TryFindAmmoSpot(probe, player, placed, out Vector3 groundPoint))
+                {
+                    continue;
+                }
+
+                created++;
+                placed.Add(groundPoint);
+                string crateName = UniqueChildName(group.transform, "AmmoCrate");
+                CreateAmmoCrate(crateName, groundPoint, group.transform, bodyMat, accentMat);
+                log.Add($"放置 {crateName}（位置 {groundPoint.x:F1}, {groundPoint.y:F1}, {groundPoint.z:F1}，+30 备弹，15 秒刷新）");
+            }
+
+            if (created == 0)
+            {
+                Vector3 fallback = player.position + forward * 3.5f;
+                if (TryFindGround(fallback, player, out float groundY))
+                {
+                    fallback.y = groundY;
+                }
+                else
+                {
+                    fallback.y = player.position.y - 1f;
+                }
+
+                created = 1;
+                string crateName = UniqueChildName(group.transform, "AmmoCrate");
+                CreateAmmoCrate(crateName, fallback, group.transform, bodyMat, accentMat);
+                log.Add($"放置 {crateName} 在玩家前方（+30 备弹，15 秒刷新）");
+            }
+
+            return created;
+        }
+
+        private static bool TryFindAmmoSpot(
+            Vector3 probe, Transform player, List<Vector3> existing, out Vector3 groundPoint)
+        {
+            groundPoint = Vector3.zero;
+            // 从玩家头顶上方 1.5 米向下检测站台地面（避免打到地铁站天花板屋顶）
+            Vector3 origin = new Vector3(probe.x, player.position.y + 1.5f, probe.z);
+            if (!Physics.Raycast(origin, Vector3.down, out RaycastHit hit, 8f, ~0, QueryTriggerInteraction.Ignore)
+                || hit.normal.y < 0.7f
+                || hit.transform.root == player.root
+                || hit.collider.GetComponentInParent<EnemyAI>() != null)
+            {
+                return false;
+            }
+
+            Vector3 point = hit.point;
+            if (Mathf.Abs(point.y - (player.position.y - 1f)) > 1.2f)
+            {
+                return false;
+            }
+
+            if (Physics.CheckSphere(point + Vector3.up * 0.55f, 0.45f, ~0, QueryTriggerInteraction.Ignore))
+            {
+                return false;
+            }
+
+            for (int i = 0; i < existing.Count; i++)
+            {
+                Vector2 diff = new Vector2(existing[i].x - point.x, existing[i].z - point.z);
+                if (diff.magnitude < 3f)
+                {
+                    return false;
+                }
+            }
+
+            groundPoint = point;
+            return true;
+        }
+
+        private static void CreateAmmoCrate(
+            string name, Vector3 groundPosition, Transform parent, Material bodyMat, Material accentMat)
+        {
+            var root = new GameObject(name);
+            Undo.RegisterCreatedObjectUndo(root, "Create AmmoCrate");
+            root.transform.SetParent(parent, false);
+            root.transform.position = groundPosition;
+
+            BoxCollider trigger = root.AddComponent<BoxCollider>();
+            trigger.isTrigger = true;
+            trigger.center = new Vector3(0f, 0.65f, 0f);
+            trigger.size = new Vector3(1.2f, 1.3f, 1.2f);
+
+            Rigidbody rb = root.AddComponent<Rigidbody>();
+            rb.isKinematic = true;
+            rb.useGravity = false;
+
+            var visual = new GameObject("Visual");
+            visual.transform.SetParent(root.transform, false);
+            visual.transform.localPosition = new Vector3(0f, 0.36f, 0f);
+
+            // 箱体、顶盖与发光绿色补给灯带
+            AddVisualCube("Body", visual.transform, Vector3.zero, new Vector3(0.56f, 0.32f, 0.36f), bodyMat);
+            AddVisualCube("Lid", visual.transform, new Vector3(0f, 0.18f, 0f), new Vector3(0.60f, 0.08f, 0.40f), bodyMat);
+            AddVisualCube("GlowStripeX", visual.transform, new Vector3(0f, 0.225f, 0f), new Vector3(0.32f, 0.025f, 0.10f), accentMat);
+            AddVisualCube("GlowStripeZ", visual.transform, new Vector3(0f, 0.225f, 0f), new Vector3(0.10f, 0.025f, 0.26f), accentMat);
+            AddVisualCube("SideBandFront", visual.transform, new Vector3(0f, 0f, 0.185f), new Vector3(0.46f, 0.06f, 0.015f), accentMat);
+            AddVisualCube("SideBandBack", visual.transform, new Vector3(0f, 0f, -0.185f), new Vector3(0.46f, 0.06f, 0.015f), accentMat);
+
+            var glowLight = new GameObject("GlowLight");
+            glowLight.transform.SetParent(root.transform, false);
+            glowLight.transform.localPosition = new Vector3(0f, 0.65f, 0f);
+            Light light = glowLight.AddComponent<Light>();
+            light.type = LightType.Point;
+            light.color = new Color(0.25f, 0.95f, 0.45f);
+            light.intensity = 1.6f;
+            light.range = 2.8f;
+            light.shadows = LightShadows.None;
+
+            AmmoPickup pickup = root.AddComponent<AmmoPickup>();
+            SetRef(pickup, "visualRoot", visual.transform);
+            SetInt(pickup, "ammoAmount", 30);
+            SetFloat(pickup, "respawnTime", 15f);
+        }
+
+        private static void AddVisualCube(string name, Transform parent, Vector3 localPos, Vector3 scale, Material mat)
+        {
+            GameObject cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            cube.name = name;
+            cube.transform.SetParent(parent, false);
+            cube.transform.localPosition = localPos;
+            cube.transform.localScale = scale;
+
+            Collider col = cube.GetComponent<Collider>();
+            if (col != null)
+            {
+                Object.DestroyImmediate(col);
+            }
+
+            if (mat != null)
+            {
+                cube.GetComponent<Renderer>().sharedMaterial = mat;
+            }
+        }
+
+        private static Material GetOrCreateAmmoCrateMaterial()
+        {
+            Material material = AssetDatabase.LoadAssetAtPath<Material>(AmmoCrateMaterialPath);
+            if (material != null)
+            {
+                return material;
+            }
+
+            Shader shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+            if (shader == null)
+            {
+                return null;
+            }
+
+            if (!AssetDatabase.IsValidFolder("Assets/FPS/Materials"))
+            {
+                AssetDatabase.CreateFolder("Assets/FPS", "Materials");
+            }
+
+            material = new Material(shader) { color = new Color(0.20f, 0.28f, 0.22f) };
+            SetFloatIfExists(material, "_Metallic", 0.35f);
+            SetFloatIfExists(material, "_Smoothness", 0.4f);
+            AssetDatabase.CreateAsset(material, AmmoCrateMaterialPath);
+            AssetDatabase.SaveAssets();
+            return material;
+        }
+
+        private static Material GetOrCreateAmmoAccentMaterial()
+        {
+            Material material = AssetDatabase.LoadAssetAtPath<Material>(AmmoAccentMaterialPath);
+            if (material != null)
+            {
+                return material;
+            }
+
+            Shader shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Standard");
+            if (shader == null)
+            {
+                return null;
+            }
+
+            if (!AssetDatabase.IsValidFolder("Assets/FPS/Materials"))
+            {
+                AssetDatabase.CreateFolder("Assets/FPS", "Materials");
+            }
+
+            Color green = new Color(0.22f, 0.95f, 0.45f);
+            material = new Material(shader) { color = green };
+            if (material.HasProperty("_EmissionColor"))
+            {
+                material.SetColor("_EmissionColor", green * 2.2f);
+                material.EnableKeyword("_EMISSION");
+                material.globalIlluminationFlags = MaterialGlobalIlluminationFlags.RealtimeEmissive;
+            }
+
+            AssetDatabase.CreateAsset(material, AmmoAccentMaterialPath);
+            AssetDatabase.SaveAssets();
+            return material;
+        }
+
+        private static string UniqueChildName(Transform parent, string baseName)
+        {
+            for (int i = 1; ; i++)
+            {
+                string candidate = $"{baseName}_{i}";
+                if (parent.Find(candidate) == null)
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        private static List<T> FindAllInScene<T>() where T : Component
+        {
+            var results = new List<T>();
+            foreach (GameObject root in SceneManager.GetActiveScene().GetRootGameObjects())
+            {
+                results.AddRange(root.GetComponentsInChildren<T>(true));
+            }
+
+            return results;
         }
 
         // =====================================================================

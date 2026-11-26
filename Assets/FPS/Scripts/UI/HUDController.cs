@@ -62,6 +62,12 @@ namespace FPS
         [Tooltip("左下角金币增加提示的显示总时长（秒）。")]
         [SerializeField, Min(0.2f)] private float coinGainDisplayDuration = 2f;
 
+        [Tooltip("左下角拾取弹药提示文字。留空时运行时自动创建。")]
+        [SerializeField] private TMP_Text ammoPickupText;
+
+        [Tooltip("左下角拾取弹药提示的显示总时长（秒）。")]
+        [SerializeField, Min(0.2f)] private float ammoPickupDisplayDuration = 2f;
+
         [Tooltip("准星物体，游戏结束时隐藏。")]
         [SerializeField] private GameObject crosshair;
 
@@ -74,6 +80,8 @@ namespace FPS
         private WeaponAmmo _ammo;
         private float _coinGainTimer;
         private Color _coinGainBaseColor = new Color(1f, 0.88f, 0.25f);
+        private float _ammoPickupTimer;
+        private Color _ammoPickupColor = new Color(0.35f, 0.95f, 0.55f);
 
         private void Start()
         {
@@ -118,6 +126,10 @@ namespace FPS
                 SetCoinGainAlpha(0f);
             }
 
+            EnsureAmmoPickupText();
+            AmmoPickup.AmmoPickedUp += OnAmmoPickedUp;
+            AmmoPickup.AmmoAlreadyFull += OnAmmoAlreadyFull;
+
             if (gameManager != null)
             {
                 gameManager.StateChanged += OnGameStateChanged;
@@ -131,23 +143,39 @@ namespace FPS
 
         private void Update()
         {
-            if (_coinGainTimer <= 0f || coinGainText == null)
+            if (_coinGainTimer > 0f && coinGainText != null)
             {
-                return;
+                _coinGainTimer -= Time.deltaTime;
+                if (_coinGainTimer <= 0f)
+                {
+                    _coinGainTimer = 0f;
+                    coinGainText.text = string.Empty;
+                    SetCoinGainAlpha(0f);
+                }
+                else
+                {
+                    float fadeWindow = Mathf.Min(0.8f, coinGainDisplayDuration * 0.4f);
+                    float alpha = _coinGainTimer < fadeWindow ? Mathf.Clamp01(_coinGainTimer / fadeWindow) : 1f;
+                    SetCoinGainAlpha(alpha);
+                }
             }
 
-            _coinGainTimer -= Time.deltaTime;
-            if (_coinGainTimer <= 0f)
+            if (_ammoPickupTimer > 0f && ammoPickupText != null)
             {
-                _coinGainTimer = 0f;
-                coinGainText.text = string.Empty;
-                SetCoinGainAlpha(0f);
-                return;
+                _ammoPickupTimer -= Time.deltaTime;
+                if (_ammoPickupTimer <= 0f)
+                {
+                    _ammoPickupTimer = 0f;
+                    ammoPickupText.text = string.Empty;
+                    SetAmmoPickupAlpha(0f);
+                }
+                else
+                {
+                    float fadeWindow = Mathf.Min(0.8f, ammoPickupDisplayDuration * 0.4f);
+                    float alpha = _ammoPickupTimer < fadeWindow ? Mathf.Clamp01(_ammoPickupTimer / fadeWindow) : 1f;
+                    SetAmmoPickupAlpha(alpha);
+                }
             }
-
-            float fadeWindow = Mathf.Min(0.8f, coinGainDisplayDuration * 0.4f);
-            float alpha = _coinGainTimer < fadeWindow ? Mathf.Clamp01(_coinGainTimer / fadeWindow) : 1f;
-            SetCoinGainAlpha(alpha);
         }
 
         private void OnDestroy()
@@ -171,6 +199,8 @@ namespace FPS
             UnbindWeaponAmmo();
 
             EnemyAI.EnemyDied -= OnEnemyDied;
+            AmmoPickup.AmmoPickedUp -= OnAmmoPickedUp;
+            AmmoPickup.AmmoAlreadyFull -= OnAmmoAlreadyFull;
 
             if (coinManager != null)
             {
@@ -322,6 +352,55 @@ namespace FPS
             Color color = _coinGainBaseColor;
             color.a = alpha;
             coinGainText.color = color;
+        }
+
+        private void OnAmmoPickedUp(int added, int reserve, int maxReserve)
+        {
+            if (ammoPickupText == null)
+            {
+                return;
+            }
+
+            string suffix = reserve >= maxReserve ? " (MAX)" : string.Empty;
+            _ammoPickupColor = new Color(0.35f, 0.95f, 0.55f);
+            ammoPickupText.text = $"+{added} AMMO{suffix}";
+            _ammoPickupTimer = ammoPickupDisplayDuration;
+            SetAmmoPickupAlpha(1f);
+        }
+
+        private void OnAmmoAlreadyFull(int reserve, int maxReserve)
+        {
+            if (ammoPickupText == null)
+            {
+                return;
+            }
+
+            _ammoPickupColor = new Color(1f, 0.70f, 0.30f);
+            ammoPickupText.text = $"AMMO FULL ({reserve} / {maxReserve})";
+            _ammoPickupTimer = Mathf.Min(1.4f, ammoPickupDisplayDuration);
+            SetAmmoPickupAlpha(1f);
+        }
+
+        private void SetAmmoPickupAlpha(float alpha)
+        {
+            Color color = _ammoPickupColor;
+            color.a = alpha;
+            ammoPickupText.color = color;
+        }
+
+        private void EnsureAmmoPickupText()
+        {
+            if (ammoPickupText == null)
+            {
+                ammoPickupText = CreateRuntimeText(
+                    "AmmoPickupText",
+                    Vector2.zero, Vector2.zero, Vector2.zero,
+                    new Vector2(40f, 150f), new Vector2(420f, 36f),
+                    24f, TextAlignmentOptions.BottomLeft, _ammoPickupColor);
+            }
+
+            ammoPickupText.text = string.Empty;
+            SetAmmoPickupAlpha(0f);
         }
 
         /// <summary>

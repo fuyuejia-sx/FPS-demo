@@ -746,7 +746,8 @@ namespace FPS.EditorTools
                 || root.GetComponentInChildren<Canvas>(true) != null
                 || root.GetComponentInChildren<Health>(true) != null
                 || root.GetComponentInChildren<RuntimeNavMeshBaker>(true) != null
-                || root.GetComponentInChildren<GameManager>(true) != null;
+                || root.GetComponentInChildren<GameManager>(true) != null
+                || root.GetComponentInChildren<AmmoPickup>(true) != null;
         }
 
         // =====================================================================
