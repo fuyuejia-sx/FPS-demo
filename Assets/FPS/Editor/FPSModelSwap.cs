@@ -146,7 +146,7 @@ namespace FPS.EditorTools
             GameObject enemyPrefab = LoadModel(EnemyDir + "/" + PropModelFile, log);
             GameObject environmentPrefab = LoadEnvironmentModel(log);
 
-            Weapon weapon = FindInScene<Weapon>();
+            Weapon weapon = FindPrimaryWeapon();
             PlayerShield playerShield = FindInScene<PlayerShield>();
             GameObject shieldObject = FindShieldObject(playerShield);
             List<EnemyAI> enemies = FindAllInScene<EnemyAI>();
@@ -242,6 +242,31 @@ namespace FPS.EditorTools
         // =====================================================================
         // 武器
         // =====================================================================
+
+        /// <summary>供商城配置等编辑器工具复用：把指定枪械模型自动朝向、缩放并挂到武器物体下。</summary>
+        internal static void ApplyWeaponModel(Weapon weapon, GameObject prefab, Material material, List<string> log)
+        {
+            if (weapon == null || prefab == null)
+            {
+                return;
+            }
+
+            SwapWeapon(weapon, prefab, material, log);
+        }
+
+        private static Weapon FindPrimaryWeapon()
+        {
+            List<Weapon> weapons = FindAllInScene<Weapon>();
+            foreach (Weapon candidate in weapons)
+            {
+                if (!candidate.name.Equals("Blaster", System.StringComparison.OrdinalIgnoreCase))
+                {
+                    return candidate;
+                }
+            }
+
+            return weapons.Count > 0 ? weapons[0] : null;
+        }
 
         private static void SwapWeapon(Weapon weapon, GameObject prefab, Material material, List<string> log)
         {

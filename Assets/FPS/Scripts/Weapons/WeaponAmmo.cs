@@ -31,12 +31,13 @@ namespace FPS
         private int _inMagazine;
         private int _reserve;
         private float _reloadEndTime;
+        private bool _initialized;
 
-        /// <summary>弹匣内的子弹数。</summary>
-        public int InMagazine => _inMagazine;
+        /// <summary>弹匣内的子弹数（未激活过的武器返回初始弹匣容量）。</summary>
+        public int InMagazine => _initialized ? _inMagazine : magazineSize;
 
-        /// <summary>备弹数。</summary>
-        public int Reserve => _reserve;
+        /// <summary>备弹数（未激活过的武器返回初始备弹量）。</summary>
+        public int Reserve => _initialized ? _reserve : startingReserve;
 
         public int MagazineSize => magazineSize;
         public bool HasInfiniteReserve => infiniteReserve;
@@ -55,8 +56,12 @@ namespace FPS
 
         private void Awake()
         {
-            _inMagazine = magazineSize;
-            _reserve = startingReserve;
+            if (!_initialized)
+            {
+                _initialized = true;
+                _inMagazine = magazineSize;
+                _reserve = startingReserve;
+            }
         }
 
         private void Update()

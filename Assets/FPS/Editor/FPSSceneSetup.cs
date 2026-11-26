@@ -4,6 +4,8 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.AI;
+using UnityEngine.EventSystems;
+using UnityEngine.InputSystem.UI;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
@@ -21,14 +23,66 @@ namespace FPS.EditorTools
     public static class FPSSceneSetup
     {
         private const string MenuPath = "FPS/一键配置场景";
+        private const string ShopMenuPath = "FPS/配置商城与陈列柜";
         private const string EnemyMaterialPath = "Assets/FPS/Materials/Enemy.mat";
         private const string ShieldMaterialPath = "Assets/FPS/Materials/Shield.mat";
+        private const string BlasterModelPath = "Assets/FPS/Models/BlasterKit/blaster-d.fbx";
+        private const string BlasterMaterialPath = "Assets/FPS/Materials/Blaster.mat";
         private const int UILayer = 5;
 
         [MenuItem(MenuPath, true)]
+        [MenuItem(ShopMenuPath, true)]
         private static bool CanSetupScene()
         {
             return !EditorApplication.isPlayingOrWillChangePlaymode;
+        }
+
+        [MenuItem(ShopMenuPath)]
+        private static void SetupShopFromMenu()
+        {
+            var log = new List<string>();
+            PlayerMovement movement = FindInScene<PlayerMovement>();
+            if (movement == null)
+            {
+                EditorUtility.DisplayDialog("FPS 商城配置",
+                    "场景中没有找到玩家物体，请先执行 FPS > 一键配置场景。", "确定");
+                return;
+            }
+
+            Camera playerCamera = movement.GetComponentInChildren<Camera>(true);
+            PlayerEquipment equipment = movement.GetComponent<PlayerEquipment>();
+            GameManager gameManager = FindInScene<GameManager>();
+            HUDController hud = FindInScene<HUDController>();
+            if (playerCamera == null || equipment == null || gameManager == null || hud == null)
+            {
+                EditorUtility.DisplayDialog("FPS 商城配置",
+                    "场景缺少玩家相机、装备切换、GameManager 或 HUD，请先执行 FPS > 一键配置场景。", "确定");
+                return;
+            }
+
+            Undo.SetCurrentGroupName("FPS 配置商城与陈列柜");
+
+            CoinManager coinManager = FindInScene<CoinManager>();
+            if (coinManager == null)
+            {
+                coinManager = Ensure<CoinManager>(gameManager.gameObject, log);
+            }
+
+            SetRef(hud, "coinManager", coinManager);
+            if (GetRef(hud, "coinCountText") == null || GetRef(hud, "coinGainText") == null)
+            {
+                CreateCoinHudElements(hud);
+                log.Add("HUD：添加右上角金币总数与左下角击杀金币提示");
+            }
+
+            SetupShop(playerCamera, equipment, gameManager, coinManager, hud, log);
+
+            EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+            string summary = log.Count > 0
+                ? "已完成商城与陈列柜配置：\n\n- " + string.Join("\n- ", log) + "\n\n运行游戏后按 B 键即可打开商城，请按 Ctrl+S 保存场景。"
+                : "商城与陈列柜已配置完成，运行游戏后按 B 键即可打开商城。";
+            Debug.Log("[FPS 商城配置] " + summary);
+            EditorUtility.DisplayDialog("FPS 商城配置", summary, "确定");
         }
 
         [MenuItem(MenuPath)]
@@ -169,18 +223,26 @@ namespace FPS.EditorTools
                 log.Add("GameManager：结束时禁用的组件中加入 PlayerEquipment");
             }
 
+            // ---------- 金币奖励 ----------
+            CoinManager coinManager = FindInScene<CoinManager>();
+            if (coinManager == null)
+            {
+                coinManager = Ensure<CoinManager>(gameManager.gameObject, log);
+            }
+
             // ---------- HUD ----------
             HUDController hud = FindInScene<HUDController>();
             if (hud == null)
             {
                 hud = CreateHud();
-                log.Add("创建 HUD（准星、血条、弹药、敌人数量、结算面板）");
+                log.Add("创建 HUD（准星、血条、弹药、敌人数量、金币、结算面板）");
             }
 
             SetRef(hud, "playerHealth", playerHealth);
             SetRef(hud, "weaponController", weaponController);
             SetRef(hud, "gameManager", gameManager);
             SetRef(hud, "playerShield", shield);
+            SetRef(hud, "coinManager", coinManager);
 
             if (GetRef(hud, "shieldFill") == null)
             {
@@ -188,9 +250,18 @@ namespace FPS.EditorTools
                 log.Add("HUD：添加盾值条");
             }
 
+            if (GetRef(hud, "coinCountText") == null || GetRef(hud, "coinGainText") == null)
+            {
+                CreateCoinHudElements(hud);
+                log.Add("HUD：添加右上角金币总数与左下角击杀金币提示");
+            }
+
             // ---------- 导入的模型 ----------
             // 把枪、盾、敌人和场景换成 Assets/FPS/Models 下导入的模型，并把角色摆到新场景里
             FPSModelSwap.ApplyImportedModels(log);
+
+            // ---------- 商城、3D 陈列柜与可购买武器 Blaster ----------
+            SetupShop(playerCamera, equipment, gameManager, coinManager, hud, log);
 
             // ---------- 带骨骼的敌人 ----------
             // Assets/FPS/Animations 下有带骨骼的模型、且场景里还没有带骨骼的敌人时，添加一个
@@ -364,6 +435,206 @@ namespace FPS.EditorTools
             SetRef(hud, "shieldFill", fill.rectTransform);
             SetRef(hud, "shieldText", text);
             SetRef(hud, "shieldGroup", group);
+        }
+
+        private static void CreateCoinHudElements(HUDController hud)
+        {
+            Transform root = hud.transform;
+
+            if (GetRef(hud, "coinCountText") == null)
+            {
+                TextMeshProUGUI coinCount = CreateText(
+                    "CoinCountText", root, "COINS: 100", 32f, TextAlignmentOptions.TopRight);
+                Undo.RegisterCreatedObjectUndo(coinCount.gameObject, "Create CoinCountText");
+                coinCount.color = new Color(1f, 0.85f, 0.2f);
+                SetRect(coinCount.rectTransform, Vector2.one, Vector2.one, Vector2.one,
+                    new Vector2(-40f, -80f), new Vector2(500f, 50f));
+                coinCount.transform.SetAsFirstSibling();
+                SetRef(hud, "coinCountText", coinCount);
+            }
+
+            if (GetRef(hud, "coinGainText") == null)
+            {
+                TextMeshProUGUI coinGain = CreateText(
+                    "CoinGainText", root, string.Empty, 28f, TextAlignmentOptions.BottomLeft);
+                Undo.RegisterCreatedObjectUndo(coinGain.gameObject, "Create CoinGainText");
+                coinGain.color = new Color(1f, 0.88f, 0.25f);
+                SetRect(coinGain.rectTransform, Vector2.zero, Vector2.zero, Vector2.zero,
+                    new Vector2(40f, 108f), new Vector2(360f, 40f));
+                coinGain.transform.SetAsFirstSibling();
+                SetRef(hud, "coinGainText", coinGain);
+            }
+        }
+
+        // =====================================================================
+        // 商城与陈列柜
+        // =====================================================================
+
+        private static void SetupShop(
+            Camera playerCamera,
+            PlayerEquipment equipment,
+            GameManager gameManager,
+            CoinManager coinManager,
+            HUDController hud,
+            List<string> log)
+        {
+            // 确保 Blaster 模型网格可读，以便自动判断枪口朝向
+            if (AssetImporter.GetAtPath(BlasterModelPath) is ModelImporter blasterImporter && !blasterImporter.isReadable)
+            {
+                blasterImporter.isReadable = true;
+                blasterImporter.SaveAndReimport();
+            }
+
+            GameObject blasterPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(BlasterModelPath);
+            Material blasterMaterial = AssetDatabase.LoadAssetAtPath<Material>(BlasterMaterialPath);
+
+            // ---------- 玩家可解锁新武器：Blaster ----------
+            Weapon blaster = FindBlasterWeapon(playerCamera.transform);
+            if (blaster == null)
+            {
+                blaster = CreateBlasterWeapon(playerCamera.transform, blasterPrefab, blasterMaterial, log);
+                log.Add("创建商城武器 Blaster（购买后可选择替换当前武器或放入背包）");
+            }
+            else if (blaster.transform.Find("Model") == null && blasterPrefab != null)
+            {
+                FPSModelSwap.ApplyWeaponModel(blaster, blasterPrefab, blasterMaterial, log);
+            }
+
+            // 未购买的商城武器不占快捷栏，由 WeaponInventory 在购买/替换时动态管理
+            if (RemoveRefFromArray(equipment, "slots", blaster.gameObject))
+            {
+                log.Add("PlayerEquipment：将 Blaster 移出初始快捷栏（购买后由背包/替换逻辑管理）");
+            }
+
+            blaster.gameObject.SetActive(false);
+
+            // ---------- 武器背包与商城管理器 ----------
+            WeaponInventory weaponInventory = FindInScene<WeaponInventory>();
+            if (weaponInventory == null)
+            {
+                weaponInventory = Ensure<WeaponInventory>(gameManager.gameObject, log);
+            }
+
+            ShopManager shopManager = FindInScene<ShopManager>();
+            if (shopManager == null)
+            {
+                shopManager = Ensure<ShopManager>(gameManager.gameObject, log);
+            }
+
+            PlayerWeaponController weaponController = equipment.GetComponent<PlayerWeaponController>();
+            SetRef(weaponInventory, "playerEquipment", equipment);
+            SetRef(weaponInventory, "weaponController", weaponController);
+            SetRef(weaponInventory, "gameManager", gameManager);
+            SetRef(weaponInventory, "shopManager", shopManager);
+
+            SetRef(shopManager, "coinManager", coinManager);
+            SetRef(shopManager, "playerEquipment", equipment);
+            SetRef(shopManager, "weaponInventory", weaponInventory);
+            SetRef(shopManager, "gameManager", gameManager);
+
+            ConfigureDefaultBlasterShopItem(shopManager, blaster.gameObject, blasterPrefab, blasterMaterial, log);
+
+            // ---------- 商城与背包 UI 及交互依赖 ----------
+            Ensure<GraphicRaycaster>(hud.gameObject, log);
+            ShopUI shopUI = Ensure<ShopUI>(hud.gameObject, log);
+            SetRef(shopUI, "shopManager", shopManager);
+            SetRef(shopUI, "hudController", hud);
+
+            BackpackUI backpackUI = Ensure<BackpackUI>(hud.gameObject, log);
+            SetRef(backpackUI, "inventory", weaponInventory);
+            SetRef(backpackUI, "hudController", hud);
+
+            if (FindInScene<EventSystem>() == null)
+            {
+                var eventSystem = new GameObject("EventSystem", typeof(EventSystem), typeof(InputSystemUIInputModule));
+                Undo.RegisterCreatedObjectUndo(eventSystem, "Create EventSystem");
+                log.Add("创建 EventSystem（支持商城按钮点击和 3D 陈列柜拖拽旋转）");
+            }
+        }
+
+        private static Weapon FindBlasterWeapon(Transform cameraTransform)
+        {
+            Transform existing = cameraTransform.Find("Blaster");
+            return existing != null ? existing.GetComponent<Weapon>() : null;
+        }
+
+        private static Weapon CreateBlasterWeapon(
+            Transform cameraTransform, GameObject modelPrefab, Material material, List<string> log)
+        {
+            var blasterObject = new GameObject("Blaster");
+            Undo.RegisterCreatedObjectUndo(blasterObject, "Create Blaster");
+            blasterObject.transform.SetParent(cameraTransform, false);
+            blasterObject.transform.localPosition = new Vector3(0.3f, -0.25f, 0.6f);
+            blasterObject.transform.localRotation = Quaternion.identity;
+            blasterObject.transform.localScale = Vector3.one;
+
+            Weapon weapon = blasterObject.AddComponent<Weapon>();
+            SetFloat(weapon, "damage", 40f);
+            SetFloat(weapon, "fireRate", 5f);
+            SetFloat(weapon, "range", 120f);
+            SetBool(weapon, "automatic", true);
+
+            WeaponAmmo ammo = blasterObject.AddComponent<WeaponAmmo>();
+            SetInt(ammo, "magazineSize", 20);
+            SetInt(ammo, "startingReserve", 100);
+            SetFloat(ammo, "reloadTime", 1.2f);
+
+            Light muzzle = CreateMuzzleLight(blasterObject.transform);
+            muzzle.color = new Color(0.25f, 0.85f, 1f);
+            muzzle.intensity = 4f;
+
+            AudioSource source = blasterObject.AddComponent<AudioSource>();
+            source.playOnAwake = false;
+
+            WeaponEffects effects = blasterObject.AddComponent<WeaponEffects>();
+            SetRef(effects, "muzzleLight", muzzle);
+            SetRef(effects, "audioSource", source);
+
+            if (modelPrefab != null)
+            {
+                FPSModelSwap.ApplyWeaponModel(weapon, modelPrefab, material, log);
+            }
+
+            return weapon;
+        }
+
+        private static void ConfigureDefaultBlasterShopItem(
+            ShopManager shopManager, GameObject blasterObject, GameObject blasterPrefab, Material blasterMaterial,
+            List<string> log)
+        {
+            var serialized = new SerializedObject(shopManager);
+            SerializedProperty itemsProp = FindProperty(serialized, "items");
+            if (itemsProp == null || !itemsProp.isArray)
+            {
+                return;
+            }
+
+            for (int i = 0; i < itemsProp.arraySize; i++)
+            {
+                SerializedProperty existing = itemsProp.GetArrayElementAtIndex(i);
+                SerializedProperty eqProp = existing.FindPropertyRelative("equipmentObject");
+                if (eqProp != null && eqProp.objectReferenceValue == blasterObject)
+                {
+                    return;
+                }
+            }
+
+            int index = itemsProp.arraySize;
+            itemsProp.arraySize = index + 1;
+            SerializedProperty entry = itemsProp.GetArrayElementAtIndex(index);
+            entry.FindPropertyRelative("id").stringValue = "pulse_blaster";
+            entry.FindPropertyRelative("displayName").stringValue = "PULSE BLASTER";
+            entry.FindPropertyRelative("description").stringValue =
+                "High-impact sci-fi energy rifle. Press 1 / 2 to switch weapons.";
+            entry.FindPropertyRelative("price").intValue = 80;
+            entry.FindPropertyRelative("equipmentObject").objectReferenceValue = blasterObject;
+            entry.FindPropertyRelative("displayModelPrefab").objectReferenceValue = blasterPrefab;
+            entry.FindPropertyRelative("displayMaterial").objectReferenceValue = blasterMaterial;
+            entry.FindPropertyRelative("displayRotationOffset").vector3Value = new Vector3(0f, 30f, 0f);
+            entry.FindPropertyRelative("displayScale").floatValue = 1f;
+
+            serialized.ApplyModifiedProperties();
+            log.Add("商城商品列表：上架 PULSE BLASTER（80 金币，使用 blaster-d.fbx 3D 陈列）");
         }
 
         // =====================================================================
@@ -733,6 +1004,34 @@ namespace FPS.EditorTools
             return true;
         }
 
+        /// <summary>如果数组里包含 value，则移除所有匹配项。返回是否发生了移除。</summary>
+        private static bool RemoveRefFromArray(Object target, string propertyName, Object value)
+        {
+            var serialized = new SerializedObject(target);
+            SerializedProperty property = FindProperty(serialized, propertyName);
+            if (property == null || !property.isArray)
+            {
+                return false;
+            }
+
+            bool removed = false;
+            for (int i = property.arraySize - 1; i >= 0; i--)
+            {
+                if (property.GetArrayElementAtIndex(i).objectReferenceValue == value)
+                {
+                    property.DeleteArrayElementAtIndex(i);
+                    removed = true;
+                }
+            }
+
+            if (removed)
+            {
+                serialized.ApplyModifiedProperties();
+            }
+
+            return removed;
+        }
+
         private static void SetBool(Object target, string propertyName, bool value)
         {
             var serialized = new SerializedObject(target);
@@ -743,6 +1042,32 @@ namespace FPS.EditorTools
             }
 
             property.boolValue = value;
+            serialized.ApplyModifiedProperties();
+        }
+
+        private static void SetFloat(Object target, string propertyName, float value)
+        {
+            var serialized = new SerializedObject(target);
+            SerializedProperty property = FindProperty(serialized, propertyName);
+            if (property == null)
+            {
+                return;
+            }
+
+            property.floatValue = value;
+            serialized.ApplyModifiedProperties();
+        }
+
+        private static void SetInt(Object target, string propertyName, int value)
+        {
+            var serialized = new SerializedObject(target);
+            SerializedProperty property = FindProperty(serialized, propertyName);
+            if (property == null)
+            {
+                return;
+            }
+
+            property.intValue = value;
             serialized.ApplyModifiedProperties();
         }
     }

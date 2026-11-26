@@ -114,11 +114,18 @@ namespace FPS
         /// <summary>有敌人死亡时触发，参数为剩余存活数量。</summary>
         public static event Action<int> EnemyDied;
 
+        /// <summary>有敌人被击杀时触发，参数为死亡的敌人实例。</summary>
+        public static event Action<EnemyAI> EnemyKilled;
+
+        /// <summary>该敌人是否为带骨骼动画的敌人。</summary>
+        public bool IsRigged => animator != null || GetComponentInChildren<Animator>(true) != null;
+
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         private static void ResetStatics()
         {
             AliveCount = 0;
             EnemyDied = null;
+            EnemyKilled = null;
         }
 
         private void Awake()
@@ -476,6 +483,7 @@ namespace FPS
             {
                 _counted = false;
                 AliveCount--;
+                EnemyKilled?.Invoke(this);
                 EnemyDied?.Invoke(AliveCount);
             }
         }

@@ -89,6 +89,177 @@ namespace FPS
             return true;
         }
 
+        /// <summary>切换到指定装备物体。不在槽位中或不可用时返回 false。</summary>
+        public bool Equip(GameObject slot)
+        {
+            int index = IndexOf(slot);
+            return index >= 0 && Equip(index);
+        }
+
+        /// <summary>查找装备物体在槽位数组中的序号，不存在时返回 -1。</summary>
+        public int IndexOf(GameObject slot)
+        {
+            if (slots == null || slot == null)
+            {
+                return -1;
+            }
+
+            for (int i = 0; i < slots.Length; i++)
+            {
+                if (slots[i] == slot)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        /// <summary>运行时向装备槽末尾追加一个新装备（如果尚未在槽位中）。</summary>
+        public void AddSlot(GameObject slot, bool available = true)
+        {
+            if (slot == null)
+            {
+                return;
+            }
+
+            if (IndexOf(slot) < 0)
+            {
+                int oldLength = slots != null ? slots.Length : 0;
+                var expanded = new GameObject[oldLength + 1];
+                for (int i = 0; i < oldLength; i++)
+                {
+                    expanded[i] = slots[i];
+                }
+
+                expanded[oldLength] = slot;
+                slots = expanded;
+            }
+
+            if (!available)
+            {
+                _unavailable.Add(slot);
+                slot.SetActive(false);
+            }
+            else
+            {
+                _unavailable.Remove(slot);
+                if (_started && Current != slot)
+                {
+                    slot.SetActive(false);
+                }
+            }
+        }
+
+        /// <summary>从快捷装备槽中移除某个装备物体（例如放入背包收纳时）。</summary>
+        public void RemoveSlot(GameObject slot)
+        {
+            if (slot == null || slots == null)
+            {
+                return;
+            }
+
+            int removeIndex = IndexOf(slot);
+            if (removeIndex < 0)
+            {
+                return;
+            }
+
+            bool wasCurrent = _started && _currentIndex == removeIndex;
+            _unavailable.Remove(slot);
+            slot.SetActive(false);
+
+            var reduced = new GameObject[slots.Length - 1];
+            int dst = 0;
+            for (int i = 0; i < slots.Length; i++)
+            {
+                if (i != removeIndex)
+                {
+                    reduced[dst++] = slots[i];
+                }
+            }
+
+            slots = reduced;
+
+            if (wasCurrent)
+            {
+                int next = FindUsable(-1, 1);
+                SetCurrent(next);
+            }
+            else if (_currentIndex > removeIndex)
+            {
+                _currentIndex--;
+            }
+        }
+
+        /// <summary>
+        /// 用 newSlot 替换快捷装备槽里的 oldSlot（用于商城购买替换或背包切换主武器）。
+        /// 被替换下来的 oldSlot 会自动隐藏；如果原先正手持 oldSlot 或 equipImmediately 为 true，则立刻切到 newSlot。
+        /// </summary>
+        public bool ReplaceSlot(GameObject oldSlot, GameObject newSlot, bool equipImmediately = false)
+        {
+            if (newSlot == null)
+            {
+                return false;
+            }
+
+            if (oldSlot == newSlot)
+            {
+                _unavailable.Remove(newSlot);
+                if (IndexOf(newSlot) < 0)
+                {
+                    AddSlot(newSlot, true);
+                }
+
+                if (equipImmediately && _started)
+                {
+                    Equip(newSlot);
+                }
+
+                return true;
+            }
+
+            // 如果 newSlot 之前已经占着另一个槽位，先移除重复项避免槽位里出现两把武器
+            int existingNew = IndexOf(newSlot);
+            if (existingNew >= 0)
+            {
+                RemoveSlot(newSlot);
+            }
+
+            int index = IndexOf(oldSlot);
+            if (index < 0)
+            {
+                AddSlot(newSlot, true);
+                if (equipImmediately && _started)
+                {
+                    Equip(newSlot);
+                }
+
+                return true;
+            }
+
+            bool wasHoldingOld = _started && _currentIndex == index;
+            if (oldSlot != null)
+            {
+                _unavailable.Remove(oldSlot);
+                oldSlot.SetActive(false);
+            }
+
+            _unavailable.Remove(newSlot);
+            slots[index] = newSlot;
+
+            if (_started && (wasHoldingOld || equipImmediately))
+            {
+                SetCurrent(index);
+            }
+            else
+            {
+                newSlot.SetActive(false);
+            }
+
+            return true;
+        }
+
         /// <summary>
         /// 设置某个装备是否可用。不可用的装备无法被切换到；
         /// 如果它正拿在手上，会立刻被收起并换成下一个可用的装备。

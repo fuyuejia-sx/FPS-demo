@@ -41,6 +41,12 @@ namespace FPS
         /// <summary>是否为全自动武器。</summary>
         public bool IsAutomatic => automatic;
 
+        /// <summary>每发子弹伤害。</summary>
+        public float Damage => damage;
+
+        /// <summary>射速（发/秒）。</summary>
+        public float FireRate => fireRate;
+
         /// <summary>成功开火时触发。之后的枪口火焰、音效、后坐力监听这个事件。</summary>
         public event Action Fired;
 

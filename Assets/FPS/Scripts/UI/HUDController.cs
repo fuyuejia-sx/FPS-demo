@@ -25,6 +25,9 @@ namespace FPS
         [Tooltip("玩家的盾牌。可留空。")]
         [SerializeField] private PlayerShield playerShield;
 
+        [Tooltip("金币管理器，用于显示金币总数和击杀奖励。留空时自动查找或创建。")]
+        [SerializeField] private CoinManager coinManager;
+
         [Header("界面元素")]
         [Tooltip("血条的填充部分。通过改变它的右侧锚点来表示血量比例。")]
         [SerializeField] private RectTransform healthFill;
@@ -50,6 +53,15 @@ namespace FPS
         [Tooltip("剩余敌人数量文字。")]
         [SerializeField] private TMP_Text enemyCountText;
 
+        [Tooltip("右上角金币总数文字。")]
+        [SerializeField] private TMP_Text coinCountText;
+
+        [Tooltip("左下角击杀获得金币提示文字。")]
+        [SerializeField] private TMP_Text coinGainText;
+
+        [Tooltip("左下角金币增加提示的显示总时长（秒）。")]
+        [SerializeField, Min(0.2f)] private float coinGainDisplayDuration = 2f;
+
         [Tooltip("准星物体，游戏结束时隐藏。")]
         [SerializeField] private GameObject crosshair;
 
@@ -60,6 +72,8 @@ namespace FPS
         [SerializeField] private TMP_Text messageText;
 
         private WeaponAmmo _ammo;
+        private float _coinGainTimer;
+        private Color _coinGainBaseColor = new Color(1f, 0.88f, 0.25f);
 
         private void Start()
         {
@@ -77,19 +91,32 @@ namespace FPS
                 OnShieldRaisedChanged(playerShield.IsRaised);
             }
 
-            Weapon weapon = weaponController != null ? weaponController.CurrentWeapon : null;
-            _ammo = weapon != null ? weapon.Ammo : null;
-            if (_ammo != null)
+            if (weaponController != null)
             {
-                _ammo.AmmoChanged += OnAmmoChanged;
-                _ammo.ReloadStarted += RefreshAmmo;
-                _ammo.ReloadFinished += RefreshAmmo;
+                weaponController.CurrentWeaponChanged += OnCurrentWeaponChanged;
+                BindWeaponAmmo(weaponController.CurrentWeapon);
             }
-
-            RefreshAmmo();
+            else
+            {
+                RefreshAmmo();
+            }
 
             EnemyAI.EnemyDied += OnEnemyDied;
             OnEnemyDied(EnemyAI.AliveCount);
+
+            EnsureCoinSystem();
+            if (coinManager != null)
+            {
+                coinManager.CoinsChanged += OnCoinsChanged;
+                RefreshCoins(coinManager.CurrentCoins);
+            }
+
+            if (coinGainText != null)
+            {
+                _coinGainBaseColor = coinGainText.color;
+                coinGainText.text = string.Empty;
+                SetCoinGainAlpha(0f);
+            }
 
             if (gameManager != null)
             {
@@ -100,6 +127,27 @@ namespace FPS
             {
                 messagePanel.SetActive(false);
             }
+        }
+
+        private void Update()
+        {
+            if (_coinGainTimer <= 0f || coinGainText == null)
+            {
+                return;
+            }
+
+            _coinGainTimer -= Time.deltaTime;
+            if (_coinGainTimer <= 0f)
+            {
+                _coinGainTimer = 0f;
+                coinGainText.text = string.Empty;
+                SetCoinGainAlpha(0f);
+                return;
+            }
+
+            float fadeWindow = Mathf.Min(0.8f, coinGainDisplayDuration * 0.4f);
+            float alpha = _coinGainTimer < fadeWindow ? Mathf.Clamp01(_coinGainTimer / fadeWindow) : 1f;
+            SetCoinGainAlpha(alpha);
         }
 
         private void OnDestroy()
@@ -115,14 +163,19 @@ namespace FPS
                 playerShield.RaisedChanged -= OnShieldRaisedChanged;
             }
 
-            if (_ammo != null)
+            if (weaponController != null)
             {
-                _ammo.AmmoChanged -= OnAmmoChanged;
-                _ammo.ReloadStarted -= RefreshAmmo;
-                _ammo.ReloadFinished -= RefreshAmmo;
+                weaponController.CurrentWeaponChanged -= OnCurrentWeaponChanged;
             }
 
+            UnbindWeaponAmmo();
+
             EnemyAI.EnemyDied -= OnEnemyDied;
+
+            if (coinManager != null)
+            {
+                coinManager.CoinsChanged -= OnCoinsChanged;
+            }
 
             if (gameManager != null)
             {
@@ -170,6 +223,45 @@ namespace FPS
             }
         }
 
+        private void OnCurrentWeaponChanged(Weapon weapon)
+        {
+            BindWeaponAmmo(weapon);
+        }
+
+        private void BindWeaponAmmo(Weapon weapon)
+        {
+            UnbindWeaponAmmo();
+            _ammo = weapon != null ? weapon.Ammo : null;
+            if (_ammo != null)
+            {
+                _ammo.AmmoChanged += OnAmmoChanged;
+                _ammo.ReloadStarted += RefreshAmmo;
+                _ammo.ReloadFinished += RefreshAmmo;
+            }
+
+            RefreshAmmo();
+        }
+
+        private void UnbindWeaponAmmo()
+        {
+            if (_ammo != null)
+            {
+                _ammo.AmmoChanged -= OnAmmoChanged;
+                _ammo.ReloadStarted -= RefreshAmmo;
+                _ammo.ReloadFinished -= RefreshAmmo;
+                _ammo = null;
+            }
+        }
+
+        /// <summary>供商城等界面临时隐藏或恢复准星。</summary>
+        public void SetCrosshairVisible(bool visible)
+        {
+            if (crosshair != null)
+            {
+                crosshair.SetActive(visible);
+            }
+        }
+
         private void OnAmmoChanged(int inMagazine, int reserve)
         {
             RefreshAmmo();
@@ -203,6 +295,99 @@ namespace FPS
             {
                 enemyCountText.text = $"ENEMIES: {remaining}";
             }
+        }
+
+        private void OnCoinsChanged(int total, int delta)
+        {
+            RefreshCoins(total);
+
+            if (delta > 0 && coinGainText != null)
+            {
+                coinGainText.text = $"+{delta} COINS";
+                _coinGainTimer = coinGainDisplayDuration;
+                SetCoinGainAlpha(1f);
+            }
+        }
+
+        private void RefreshCoins(int total)
+        {
+            if (coinCountText != null)
+            {
+                coinCountText.text = $"COINS: {total}";
+            }
+        }
+
+        private void SetCoinGainAlpha(float alpha)
+        {
+            Color color = _coinGainBaseColor;
+            color.a = alpha;
+            coinGainText.color = color;
+        }
+
+        /// <summary>
+        /// 场景里未提前运行“一键配置场景”时，运行时自动补齐 CoinManager 和金币 UI 文字，
+        /// 保证直接点 Play 也能正常显示右上角金币总数与左下角击杀奖励。
+        /// </summary>
+        private void EnsureCoinSystem()
+        {
+            if (coinManager == null)
+            {
+                coinManager = FindFirstObjectByType<CoinManager>();
+                if (coinManager == null)
+                {
+                    GameObject host = gameManager != null ? gameManager.gameObject : gameObject;
+                    coinManager = host.AddComponent<CoinManager>();
+                }
+            }
+
+            if (coinCountText == null)
+            {
+                coinCountText = CreateRuntimeText(
+                    "CoinCountText",
+                    Vector2.one, Vector2.one, Vector2.one,
+                    new Vector2(-40f, -80f), new Vector2(500f, 50f),
+                    32f, TextAlignmentOptions.TopRight, new Color(1f, 0.85f, 0.2f));
+            }
+
+            if (coinGainText == null)
+            {
+                coinGainText = CreateRuntimeText(
+                    "CoinGainText",
+                    Vector2.zero, Vector2.zero, Vector2.zero,
+                    new Vector2(40f, 108f), new Vector2(360f, 40f),
+                    28f, TextAlignmentOptions.BottomLeft, new Color(1f, 0.88f, 0.25f));
+            }
+        }
+
+        private TMP_Text CreateRuntimeText(
+            string objectName,
+            Vector2 anchorMin, Vector2 anchorMax, Vector2 pivot,
+            Vector2 anchoredPosition, Vector2 size,
+            float fontSize, TextAlignmentOptions alignment, Color color)
+        {
+            var go = new GameObject(objectName, typeof(RectTransform));
+            go.layer = gameObject.layer;
+            go.transform.SetParent(transform, false);
+            go.transform.SetAsFirstSibling();
+
+            var rect = (RectTransform)go.transform;
+            rect.anchorMin = anchorMin;
+            rect.anchorMax = anchorMax;
+            rect.pivot = pivot;
+            rect.anchoredPosition = anchoredPosition;
+            rect.sizeDelta = size;
+
+            TextMeshProUGUI label = go.AddComponent<TextMeshProUGUI>();
+            if (enemyCountText != null && enemyCountText.font != null)
+            {
+                label.font = enemyCountText.font;
+            }
+
+            label.fontSize = fontSize;
+            label.alignment = alignment;
+            label.color = color;
+            label.raycastTarget = false;
+            return label;
         }
 
         private void OnGameStateChanged(GameState state)
